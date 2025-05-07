@@ -1,57 +1,103 @@
 with most_recent_filing_id as (
-select filer_committee_id_number
-,coverage_from_date
-,coverage_through_date 
-,max(fec_report_id) as report_id 
-from f3x_fecfile 
-where filer_committee_id_number='C00401224'
-and coverage_from_date between '2020-01-01' and '2020-03-31'
-group by 1,2,3)
+    select filer_committee_id_number
+        ,coverage_from_date
+        ,coverage_through_date 
+        ,max(fec_report_id) as report_id 
+    from f3x_fecfile 
+    where filer_committee_id_number='C00401224'
+        and coverage_from_date between '2020-01-01' and '2020-03-31'
+    group by 1,2,3
+    )
+
 select sa.fec_report_id
-,sa.date_report_received
-,sa.form_type
-,sa.filer_committee_id_number
-,sa.transaction_id
-,sa.entity_type
-,sa.contributor_last_name
-,sa.contributor_first_name 
-,sa.contributor_street_1
-,sa.contributor_city
-,sa.contributor_state
-,sa.contributor_zip_code
-,sa.contribution_date
-,sa.contribution_amount::text
-,sa.contribution_aggregate::text 
-,sa.contribution_purpose_descrip
-,sa.contributor_employer
-,sa.contributor_occupation
-,sa.memo_text_description
-from sa_fecfile sa
-join lr on sa.fec_report_id=lr.report_id
+    ,sa.date_report_received
+    ,sa.form_type
+    ,sa.filer_committee_id_number
+    ,sa.transaction_id
+    ,sa.entity_type
+    ,sa.contributor_last_name
+    ,sa.contributor_first_name 
+    ,sa.contributor_street_1
+    ,sa.contributor_city
+    ,sa.contributor_state
+    ,sa.contributor_zip_code
+    ,sa.contribution_date
+    ,sa.contribution_amount::text
+    ,sa.contribution_aggregate::text
+    ,sa.contribution_purpose_descrip
+    ,sa.contributor_employer
+    ,sa.contributor_occupation
+    ,sa.memo_text_description
+
+--i always use 'as' when aliasing a table because sometimes my eyes skip over the single space and I think the alias is part of the table name
+--also added in below from statements
+
+from sa_fecfile as sa
+
+--I am assuming lr refers to CTE at the top, joined on report id. 
+--alias name doesn't make sense intuitively, am renaming alias to rf for 'recent filing' 
+
+join most_recent_filing_id as rf on sa.fec_report_id=rf.report_id   
 where upper(sa.form_type)='SA11AI'
 order by random()
-limit 1600000
-), FEC_Committee_Data_2020 as (
-select * from fec_committees where bg_cycle=2020
-)
+
+--I am curious how this number was reached. Many places pick limits in intervals of 5. Why not 1500000?
+
+limit 1600000 
+
+--there used to be an orphaned parenthesis here, but the systems I have used use a semicolon to denote separate queries
+;
+
+--This appears to be a CTE, which needs a with at the beginning
+with FEC_Committee_Data_2020 as (
+	select * from fec_committees
+		where bg_cycle=2020
+	),
+
+-- the nested subqueries for 2 consecutive from statements is confusingly written and makes what the end product is returning more unclear. 
+-- I have moved the b table to also be a CTE ahead of the main query and allows the subquery to be joined in more easily. 
+
+contribution_aggregates as (
+	SELECT a.filer_committee_id_number
+    			,a.contributor_state
+    			,sum(a.contribution_aggregate) total
+		from DS_technical_112221 as a
+		group by 1,2
+		)
+-- This appears to be the main query return, but I am confused as to why the select * in the FEC_Committee_Data_2020 is necessary in that case. 
+-- I would expect the return file for this query to be 4 columns: committee name, count instate contributions, count out of state contributions, percent instate contributions.
+-- However, the file for the storytelling exercise seems to be pulling exclusively from the FEC_Committee_Data_2020 table with no reference to any of these instate/outofstate calculations.
+-- Unsure why any of the following query language is needed for a file that doesn't reference it. Does it need to be deleted?
+
 SELECT cmte_nm
     ,sum(case when instate=TRUE then total end) as instate
     ,sum(case when instate=FALSE then total end) as outofstate
     ,sum(case when instate=TRUE then total end)::numeric / sum(total)::numeric as instate_pct
     
+-- I am renaming the alias for both the b and c tables. I find using an alias that clearly references the source table easier
+-- And I don't have to keep scrolling back and forth to remind myself what is a vs b vs c
+
 from (
-SELECT c.cmte_nm
-    ,c.cmte_st
-    ,b.contributor_state
-    ,c.cmte_st = b.contributor_state as instate
-    ,b.total
+	SELECT fec.cmte_nm
+    		,fec.cmte_st
+    		,cag.contributor_state
+
+--I haven't seen anyone do this before, but I think it needs to be a case when. But if not, that is super useful.
+    		,case 
+			    when fec.cmte_st = cag.contributor_state then 'TRUE'
+			    else 'FALSE' 
+			    end as instate
+    		,cag.total
     
-from (SELECT a.filer_committee_id_number
-    ,a.contributor_state
-    ,sum(a.contribution_aggregate) total
-from DS_technical_112221 a
-group by 1,2) b
-    ,FEC_Committee_Data_2020 as c
-)
+	from contribution_aggregates as cag
+	
+-- joining the b table to the c table without using a join typically requires a where statement need to be added clarifying the id match. And while that is possible, joins are easier to read and more common.
+--for this join, I am assuming that fec_committees from the first CTE has filer_committee_id_number 
+
+    	join FEC_Committee_Data_2020 as fec on fec.filer_committee_id_number = cag.filer_committee_id_number
+	)
+
 group by 1
-having cmte_nm = 'ACTBLUE';
+having cmte_nm = 'ACTBLUE'
+
+;
